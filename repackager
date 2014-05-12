@@ -1,0 +1,118 @@
+#!/bin/ksh
+#
+# Copyright (c) 2014 Fabian Raetz <fabian.raetz@gmail.com>
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+arch=$(arch -s)
+nodever=$(node -v | sed -e "s/v//")
+
+prefix=/usr/local
+
+nodepkg_name=$1
+obsdpkg=node-$nodepkg_name
+
+fakedirbase=/home/mischi/code/npm-openbsdports-repackager/fake
+fakedir="$fakedirbase/$nodepkg_name/fake-$arch"
+fakedirprefix="$fakedir$prefix"
+
+plist=$fakedir/plist
+descr=$fakedir/descr
+
+#nodepkg_ver=""
+#nodepkg_homepage=""
+#nodepkg_descr=""
+#nodepkg_comment=""
+#nodepkg_license=""
+
+make_fake() {
+	mkdir -p $fakedirprefix
+	npm install -g $nodepkg_name --prefix $fakedirprefix
+	sudo chown -R root:wheel $fakedirprefix
+}
+
+make_parsepkg() {
+	nodepkg_conf="$fakedirprefix/lib/node_modules/$nodepkg_name/package.json"
+	nodepkg_ver=$(jq -r '.version' $nodepkg_conf)
+	nodepkg_homepage=$(jq -r '.homepage' $nodepkg_conf)
+	nodepkg_descr=$(jq -r '.description' $nodepkg_conf)
+	nodepkg_license=$(jq -r '.licenses[].type' $nodepkg_conf)
+
+	descrlen=$(echo $nodepkg_descr | wc -m)
+	if [ $descrlen -ge 60 ]; then
+		print "Timming description ..."
+		nodepkg_comment=$(echo $nodepkg_descr | cut -c -59)
+	else
+		nodepkg_comment=$nodepkg_descr
+	fi
+}
+
+make_plist() {
+	print "Creating plist ..."
+	for i in $(find $fakedirprefix); do
+		if [ $i == $fakedirprefix ]; then
+			continue
+		fi
+
+		s=$(echo $i | sed -e "s,$fakedirprefix/,,")
+
+		if [ $s == lib -o $s == bin ]; then
+			continue
+		fi
+
+		if [ -f $i -a -x $i ]; then
+			echo "@bin $s" >> $plist
+		elif [ -d $i ]; then
+			echo "@dir $s" >> $plist
+		else
+			echo "$s" >> $plist
+		fi
+	done
+}
+
+make_descr() {
+	# XXX parse $nodepkg_conf readme from markfown to txt and use 
+	# that instead of description`
+	echo $nodepkg_descr > $descr
+}
+
+make_pkg() {
+	print "Creating package ..."
+	# XXX parse $nodepkg_license and use it for -DFTP / -DCDROM
+	pkg_create \
+		-A $arch \
+		-B $fakedir \
+		-f $plist \
+		-d $descr \
+		-DCOMMENT="$nodepkg_comment" \
+		-DHOMEPAGE="$nodepkg_homepage" \
+		-DFULLPKGPATH="www/$obsdpkg" \
+		-DMAINTAINER="Fabian Raetz <fabian.raetz@gmail.com>" \
+		-DCDROM="Yes" \
+		-DFTP="Yes" \
+		-P "lang/node:node->=0.6.17p2:node-$nodever" \
+		-p $prefix \
+		$obsdpkg-$nodepkg_ver.tgz
+}
+
+make_clean() {
+	print "Cleaning up fake ..."
+	sudo rm -rf /home/mischi/code/npm-openbsdports-repackager/fake/$nodepkg_name
+}
+
+make_fake
+make_parsepkg
+make_plist
+make_descr
+make_pkg
+#make_clean
